@@ -9,6 +9,23 @@
     <link rel="icon" href="/favicon.ico" />
   </head>
   <body>
+    <script>
+      // Apply saved/system theme before React hydration to avoid flash
+      (function () {
+        try {
+          var theme = localStorage.getItem("theme") || "system";
+          var isDark =
+            theme === "dark" ||
+            (theme === "system" &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          if (isDark) document.documentElement.classList.add("dark");
+          // Set theme-color to match background so OS bars blend
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta)
+            meta.setAttribute("content", isDark ? "#020617" : "#ffffff");
+        } catch (e) {}
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
     <script>

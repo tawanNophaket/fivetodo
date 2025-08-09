@@ -12,6 +12,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  listSnapshots,
   requestPersistentStorage,
   restoreLatest,
   saveSnapshot,
@@ -105,6 +106,13 @@ const uuid = () =>
   globalThis.crypto?.randomUUID
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2);
+
+// Light haptic feedback on supported devices
+function haptic(ms = 12) {
+  try {
+    navigator.vibrate?.(ms);
+  } catch {}
+}
 
 /**
  * Parse quick-capture syntax:
@@ -261,8 +269,21 @@ export default function BestTodoApp() {
     /** @type {"list"|"kanban"|"planner"|"pomodoro"} */ ("list")
   );
   const [notifReady, setNotifReady] = useState(false);
+  const [theme, setTheme] = useState(() => {
+    try {
+      return localStorage.getItem("theme") || "system";
+    } catch {
+      return "system";
+    }
+  });
   const inputRef = useRef(null);
   const timersRef = useRef(/** @type {Record<string,number>} */ ({}));
+  const [toast, setToast] = useState(
+    /** @type {null | { id:number, msg:string, actionLabel?:string, onAction?:() => void }} */ (
+      null
+    )
+  );
+  const toastTimer = useRef(/** @type {number|undefined} */ (undefined));
 
   useEffect(() => {
     const id = setTimeout(() => {
@@ -272,6 +293,52 @@ export default function BestTodoApp() {
     }, 200);
     return () => clearTimeout(id);
   }, [tasks]);
+
+  function showToast(msg, actionLabel, onAction) {
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    setToast({ id: Date.now(), msg, actionLabel, onAction });
+    toastTimer.current = window.setTimeout(() => setToast(null), 4000);
+  }
+
+  async function undoLastChange() {
+    try {
+      const snaps = await listSnapshots(5);
+      const cur = JSON.stringify(tasks);
+      const candidate = snaps.find(
+        (s) => JSON.stringify(s?.payload?.tasks || []) !== cur
+      )?.payload;
+      const prev = candidate ?? snaps?.[1]?.payload;
+      if (prev?.tasks && Array.isArray(prev.tasks)) {
+        setTasks(prev.tasks);
+        haptic();
+      }
+    } catch {}
+  }
+
+  // Theme handling: system + toggle
+  useEffect(() => {
+    const root = document.documentElement;
+    const apply = (mode) => {
+      const isDark =
+        mode === "dark" ||
+        (mode === "system" &&
+          window.matchMedia("(prefers-color-scheme: dark)").matches);
+      root.classList.toggle("dark", isDark);
+      // keep browser UI bars in sync
+      try {
+        const meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute("content", isDark ? "#020617" : "#ffffff");
+      } catch {}
+    };
+    apply(theme);
+    try {
+      localStorage.setItem("theme", theme);
+    } catch {}
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => apply(theme);
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, [theme]);
 
   useEffect(() => {
     // Improve data durability on mobile
@@ -448,6 +515,8 @@ export default function BestTodoApp() {
   }
 
   function toggleDone(id) {
+    // snapshot current state for undo
+    saveSnapshot({ tasks });
     setTasks((prev) =>
       prev.map((t) => {
         if (t.id !== id) return t;
@@ -479,6 +548,7 @@ export default function BestTodoApp() {
         return { ...t, ...patch };
       })
     );
+    showToast("Marked done", "Undo", undoLastChange);
   }
 
   function nextDueDate(due, rec /** @type {Recurrence} */) {
@@ -501,7 +571,10 @@ export default function BestTodoApp() {
   }
 
   function removeTask(id) {
+    // snapshot current state for undo
+    saveSnapshot({ tasks });
     setTasks((prev) => prev.filter((t) => t.id !== id));
+    showToast("Task deleted", "Undo", undoLastChange);
   }
   function updateTask(id, patch) {
     setTasks((prev) =>
@@ -535,14 +608,14 @@ export default function BestTodoApp() {
   }
 
   return (
-    <div className="min-h-screen w-full bg-white text-slate-900">
+    <div className="min-h-screen w-full bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100">
       <div className="mx-auto max-w-5xl px-4 pt-4 pb-24 md:pb-8">
         {/* Header */}
-        <div className="sticky top-0 z-20 -mx-4 mb-4 border-b border-slate-200 bg-white/80 px-4 pt-safe backdrop-blur supports-[backdrop-filter]:bg-white/60 md:static md:mb-0 md:border-none md:bg-transparent md:backdrop-blur-none">
+        <div className="sticky top-0 z-20 -mx-4 mb-4 border-b border-slate-200 bg-white/80 px-4 pt-safe backdrop-blur supports-[backdrop-filter]:bg-white/60 dark:border-slate-800 dark:bg-slate-900/80 supports-[backdrop-filter]:dark:bg-slate-900/60 md:static md:mb-0 md:border-none md:bg-transparent md:backdrop-blur-none">
           <div className="mx-auto max-w-5xl py-3">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div className="flex items-center gap-3">
-                <ListTodo className="h-5 w-5 text-slate-900 md:h-6 md:w-6" />
+                <ListTodo className="h-5 w-5 text-slate-900 dark:text-slate-100 md:h-6 md:w-6" />
                 <h1 className="text-lg font-semibold tracking-tight md:text-xl">
                   FIVE
                 </h1>
@@ -560,9 +633,20 @@ export default function BestTodoApp() {
                   />
                 </div>
                 <select
+                  value={theme}
+                  onChange={(e) => setTheme(e.target.value)}
+                  className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm sm:w-28 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  aria-label="Theme"
+                  title="Theme"
+                >
+                  <option value="system">System</option>
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                </select>
+                <select
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
-                  className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm sm:w-32"
+                  className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm sm:w-32 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                   aria-label="Filter"
                 >
                   <option value="today">Today</option>
@@ -598,7 +682,7 @@ export default function BestTodoApp() {
                 >
                   Install
                 </Button>
-                <div className="ml-1 hidden rounded-lg border border-slate-200 bg-white p-1 md:inline-flex">
+                <div className="ml-1 hidden rounded-lg border border-slate-200 bg-white p-1 dark:border-slate-700 dark:bg-slate-900 md:inline-flex">
                   <Tab
                     onClick={() => setView("list")}
                     active={view === "list"}
@@ -743,11 +827,13 @@ export default function BestTodoApp() {
         </div>
 
         {/* Bottom nav (mobile) */}
-        <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/90 backdrop-blur md:hidden pb-safe">
+        <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/90 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 md:hidden pb-safe">
           <div className="mx-auto flex max-w-5xl items-center justify-around px-4 py-2">
             <button
               className={`flex flex-col items-center gap-1 text-xs ${
-                view === "list" ? "text-slate-900" : "text-slate-500"
+                view === "list"
+                  ? "text-slate-900 dark:text-slate-100"
+                  : "text-slate-500 dark:text-slate-400"
               }`}
               onClick={() => setView("list")}
             >
@@ -755,7 +841,9 @@ export default function BestTodoApp() {
             </button>
             <button
               className={`flex flex-col items-center gap-1 text-xs ${
-                view === "kanban" ? "text-slate-900" : "text-slate-500"
+                view === "kanban"
+                  ? "text-slate-900 dark:text-slate-100"
+                  : "text-slate-500 dark:text-slate-400"
               }`}
               onClick={() => setView("kanban")}
             >
@@ -763,7 +851,20 @@ export default function BestTodoApp() {
             </button>
             <button
               className={`flex flex-col items-center gap-1 text-xs ${
-                view === "planner" ? "text-slate-900" : "text-slate-500"
+                showDone
+                  ? "text-slate-900 dark:text-slate-100"
+                  : "text-slate-500 dark:text-slate-400"
+              }`}
+              title={showDone ? "Hide completed" : "Show completed"}
+              onClick={() => setShowDone((s) => !s)}
+            >
+              <CheckCircle2 className="h-5 w-5" /> {showDone ? "Hide" : "Show"}
+            </button>
+            <button
+              className={`flex flex-col items-center gap-1 text-xs ${
+                view === "planner"
+                  ? "text-slate-900 dark:text-slate-100"
+                  : "text-slate-500 dark:text-slate-400"
               }`}
               onClick={() => setView("planner")}
             >
@@ -771,7 +872,9 @@ export default function BestTodoApp() {
             </button>
             <button
               className={`flex flex-col items-center gap-1 text-xs ${
-                view === "pomodoro" ? "text-slate-900" : "text-slate-500"
+                view === "pomodoro"
+                  ? "text-slate-900 dark:text-slate-100"
+                  : "text-slate-500 dark:text-slate-400"
               }`}
               onClick={() => setView("pomodoro")}
             >
@@ -779,6 +882,39 @@ export default function BestTodoApp() {
             </button>
           </div>
         </nav>
+
+        {/* Toast */}
+        <div className="pointer-events-none fixed inset-x-0 bottom-16 z-40 flex justify-center px-4 md:bottom-4">
+          <AnimatePresence>
+            {toast && (
+              <motion.div
+                key={toast.id}
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 16 }}
+                transition={{ duration: 0.18 }}
+                className="pointer-events-auto max-w-[92vw] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-lg dark:border-slate-700 dark:bg-slate-900"
+                role="status"
+                aria-live="polite"
+              >
+                <div className="flex items-center gap-3">
+                  <span>{toast.msg}</span>
+                  {toast.onAction && (
+                    <button
+                      className="ml-2 rounded-md border border-slate-200 px-2 py-1 text-xs hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
+                      onClick={() => {
+                        toast.onAction?.();
+                        setToast(null);
+                      }}
+                    >
+                      {toast.actionLabel || "Undo"}
+                    </button>
+                  )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       </div>
     </div>
   );
@@ -790,8 +926,8 @@ function Tab({ icon: Icon, label, active, onClick }) {
       onClick={onClick}
       className={`flex items-center gap-1 rounded-md px-3 py-1.5 text-sm ${
         active
-          ? "bg-slate-100 text-slate-900"
-          : "text-slate-600 hover:bg-slate-50"
+          ? "bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-slate-100"
+          : "text-slate-600 hover:bg-slate-50 dark:text-slate-400 dark:hover:bg-slate-800/50"
       }`}
     >
       <Icon className="h-4 w-4" /> {label}
@@ -811,6 +947,19 @@ function ListView({ items, onToggle, onRemove, onUpdate }) {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
             transition={{ type: "spring", damping: 20, stiffness: 300 }}
+            drag="x"
+            dragConstraints={{ left: 0, right: 0 }}
+            onDragEnd={(e, info) => {
+              const x = info.offset.x;
+              const threshold = 80; // px
+              if (x > threshold) {
+                haptic();
+                onToggle(t.id);
+              } else if (x < -threshold) {
+                haptic();
+                onRemove(t.id);
+              }
+            }}
           >
             <TaskRow
               task={t}
@@ -822,7 +971,7 @@ function ListView({ items, onToggle, onRemove, onUpdate }) {
         ))}
       </AnimatePresence>
       {items.length === 0 && (
-        <div className="py-10 text-center text-slate-500">
+        <div className="py-10 text-center text-slate-500 dark:text-slate-400">
           No tasks match your filters. Add something above.
         </div>
       )}
@@ -834,7 +983,7 @@ function StatCard({ label, value, sub, icon: Icon }) {
   return (
     <Card className="rounded-xl">
       <CardHeader className="pb-2">
-        <div className="flex items-center gap-2 text-sm font-medium text-slate-600">
+        <div className="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-400">
           {Icon ? <Icon className="h-4 w-4" /> : null}
           <span>{label}</span>
         </div>
@@ -842,7 +991,11 @@ function StatCard({ label, value, sub, icon: Icon }) {
       <CardContent className="pt-0">
         <div className="text-2xl font-semibold">
           {value}{" "}
-          {sub ? <span className="text-sm text-slate-500">{sub}</span> : null}
+          {sub ? (
+            <span className="text-sm text-slate-500 dark:text-slate-400">
+              {sub}
+            </span>
+          ) : null}
         </div>
       </CardContent>
     </Card>
@@ -869,10 +1022,12 @@ function KanbanView({
           key={c.key}
           onDragOver={(e) => e.preventDefault()}
           onDrop={() => onDropStatus(c.key)}
-          className="min-h-[320px] rounded-xl border border-slate-200 bg-white p-3"
+          className="min-h-[320px] rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900"
         >
           <div className="mb-2 flex items-center justify-between">
-            <div className="text-sm font-medium text-slate-600">{c.label}</div>
+            <div className="text-sm font-medium text-slate-600 dark:text-slate-400">
+              {c.label}
+            </div>
           </div>
           <div className="space-y-2">
             {items
@@ -915,12 +1070,12 @@ function PlannerView({
           key={c.key}
           onDragOver={(e) => e.preventDefault()}
           onDrop={() => onDropSlot(c.key)}
-          className="min-h-[320px] rounded-xl border border-slate-200 bg-white p-3"
+          className="min-h-[320px] rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900"
         >
           {(() => {
             const Icon = c.icon;
             return (
-              <div className="mb-2 flex items-center gap-2 text-sm font-medium text-slate-600">
+              <div className="mb-2 flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-400">
                 <Icon className="h-4 w-4" /> {c.label}
               </div>
             );
@@ -980,7 +1135,9 @@ function TaskCard({ task, onToggle, onRemove, onUpdate }) {
             ))}
           </div>
           {task.notes && (
-            <p className="mt-1 text-sm text-slate-600">{task.notes}</p>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+              {task.notes}
+            </p>
           )}
           {task.subtasks?.length > 0 && (
             <div className="mt-2 space-y-1">
@@ -1005,7 +1162,7 @@ function TaskCard({ task, onToggle, onRemove, onUpdate }) {
               ))}
             </div>
           )}
-          <div className="mt-2 text-xs text-slate-500">
+          <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
             Updated {new Date(task.updatedAt).toLocaleString()} • Energy{" "}
             {task.energy} • {task.durationMin}m
           </div>
@@ -1053,7 +1210,7 @@ function TaskDialog({ task, onUpdate }) {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div className="sm:col-span-2 space-y-3">
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">
                 Title
               </label>
               <Input
@@ -1062,7 +1219,7 @@ function TaskDialog({ task, onUpdate }) {
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">
                 Notes
               </label>
               <Textarea
@@ -1073,7 +1230,7 @@ function TaskDialog({ task, onUpdate }) {
             </div>
             <div>
               <div className="mb-1 flex items-center justify-between">
-                <span className="text-xs font-medium text-slate-500">
+                <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
                   Subtasks
                 </span>
                 <Button size="sm" variant="secondary" onClick={addSubtask}>
@@ -1121,13 +1278,15 @@ function TaskDialog({ task, onUpdate }) {
                   ))}
                 </div>
               ) : (
-                <p className="text-xs text-slate-500">No subtasks yet.</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  No subtasks yet.
+                </p>
               )}
             </div>
           </div>
           <div className="space-y-3">
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">
                 Due
               </label>
               <Input
@@ -1137,7 +1296,7 @@ function TaskDialog({ task, onUpdate }) {
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">
                 Reminder
               </label>
               <Input
@@ -1161,13 +1320,13 @@ function TaskDialog({ task, onUpdate }) {
               </Button>
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">
                 Priority
               </label>
               <select
                 value={task.priority}
                 onChange={(e) => onUpdate({ priority: e.target.value })}
-                className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm shadow-sm"
+                className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
               >
                 <option value="low">Low</option>
                 <option value="medium">Medium</option>
@@ -1176,13 +1335,13 @@ function TaskDialog({ task, onUpdate }) {
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">
                 Energy
               </label>
               <select
                 value={task.energy}
                 onChange={(e) => onUpdate({ energy: e.target.value })}
-                className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm shadow-sm"
+                className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
               >
                 <option value="low">Low</option>
                 <option value="medium">Medium</option>
@@ -1190,7 +1349,7 @@ function TaskDialog({ task, onUpdate }) {
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">
                 Duration (min)
               </label>
               <Input
@@ -1204,13 +1363,13 @@ function TaskDialog({ task, onUpdate }) {
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">
                 Slot
               </label>
               <select
                 value={task.slot}
                 onChange={(e) => onUpdate({ slot: e.target.value })}
-                className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm shadow-sm"
+                className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
               >
                 <option value="any">Anytime</option>
                 <option value="morning">Morning</option>
@@ -1242,13 +1401,13 @@ function RecurrenceEditor({ value, onChange }) {
   const rec = value || { freq: "none", interval: 1 };
   return (
     <div>
-      <label className="mb-1 block text-xs font-medium text-slate-500">
+      <label className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">
         Recurring
       </label>
       <select
         value={rec.freq}
         onChange={(e) => onChange({ ...rec, freq: e.target.value })}
-        className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm shadow-sm"
+        className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
       >
         <option value="none">None</option>
         <option value="daily">Daily</option>
@@ -1258,7 +1417,9 @@ function RecurrenceEditor({ value, onChange }) {
       {rec.freq !== "none" && (
         <div className="mt-2 grid grid-cols-2 gap-2">
           <div>
-            <label className="mb-1 block text-xs text-slate-500">Every</label>
+            <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">
+              Every
+            </label>
             <Input
               type="number"
               min={1}
@@ -1297,10 +1458,10 @@ function WeekdayPicker({ value, onChange }) {
             set.has(i) ? set.delete(i) : set.add(i);
             onChange(Array.from(set).sort());
           }}
-          className={`rounded-md border border-slate-200 px-2 py-1 text-xs ${
+          className={`rounded-md border border-slate-200 px-2 py-1 text-xs dark:border-slate-700 ${
             value.includes(i)
-              ? "bg-slate-100 text-slate-900"
-              : "bg-white text-slate-700 hover:bg-slate-50"
+              ? "bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-slate-100"
+              : "bg-white text-slate-700 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800/60"
           }`}
         >
           {d}
@@ -1339,7 +1500,7 @@ function TagEditor({ tags, onChange }) {
           <Badge key={tg} variant="outline" className="rounded-full">
             #{tg}
             <button
-              className="ml-1 rounded-full p-0.5 hover:bg-slate-100"
+              className="ml-1 rounded-full p-0.5 hover:bg-slate-100 dark:hover:bg-slate-800"
               onClick={() => onChange(tags.filter((x) => x !== tg))}
             >
               <X className="h-3 w-3" />
@@ -1386,7 +1547,7 @@ function ExportImport({ tasks, setTasks }) {
       <Button variant="secondary" size="sm" onClick={doExport}>
         <Save className="mr-2 h-4 w-4" /> Export
       </Button>
-      <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-sm hover:bg-slate-50">
+      <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-sm hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/60">
         <input
           type="file"
           accept="application/json"
@@ -1474,7 +1635,7 @@ function PomodoroView({ tasks, onFinish }) {
           <select
             value={boundTask ?? ""}
             onChange={(e) => setBoundTask(e.target.value)}
-            className="h-9 w-64 rounded-md border border-slate-300 bg-white px-3 text-sm shadow-sm"
+            className="h-9 w-64 rounded-md border border-slate-300 bg-white px-3 text-sm shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
           >
             <option value="">— None —</option>
             {tasks
@@ -1513,7 +1674,7 @@ function PomodoroView({ tasks, onFinish }) {
 
 function NumberSetting({ label, value, setValue }) {
   return (
-    <div className="rounded-xl border border-slate-200 p-3 text-left">
+    <div className="rounded-xl border border-slate-200 p-3 text-left dark:border-slate-700">
       <div className="text-xs text-slate-500">{label}</div>
       <div className="mt-1 flex items-center gap-2">
         <Button

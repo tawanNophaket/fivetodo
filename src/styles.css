@@ -7,6 +7,11 @@
   color-scheme: light;
 }
 
+/* When the html element has .dark, hint UA widgets and scrollbars */
+.dark {
+  color-scheme: dark;
+}
+
 html,
 body,
 #root {
@@ -21,6 +26,11 @@ html {
 body {
   background: #fff;
   color: rgb(15 23 42);
+}
+
+.dark body {
+  background: rgb(2 6 23);
+  color: rgb(226 232 240);
 }
 
 kbd {
