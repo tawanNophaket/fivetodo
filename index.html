@@ -28,6 +28,10 @@
     </script>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <script type="module">
+      import jsQR from 'jsqr';
+      window.jsQR = jsQR;
+    </script>
     <script>
       // Light install prompt
       let deferredPrompt;

@@ -2,86 +2,49 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogClose,
+} from "@/components/ui/dialog";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  ListTodo,
+  LayoutGrid,
+  KanbanSquare,
+  Sun,
+  TimerReset,
+  CheckCircle2,
+  Calendar as CalendarIcon,
+  Flag,
+  Search,
+  Bell,
+  BellRing,
+  X,
+  Pencil,
+  Trash2,
+  Save,
+  Sunrise,
+  Sunset,
+  Moon,
+} from "lucide-react";
+import QRCode from "qrcode";
+import {
+  compressToEncodedURIComponent,
+  decompressFromEncodedURIComponent,
+} from "lz-string";
+import {
+  saveSnapshot,
   listSnapshots,
   requestPersistentStorage,
   restoreLatest,
-  saveSnapshot,
 } from "@/lib/history";
-import { AnimatePresence, motion } from "framer-motion";
-import {
-  Bell,
-  BellRing,
-  Calendar as CalendarIcon,
-  CheckCircle2,
-  Flag,
-  KanbanSquare,
-  LayoutGrid,
-  ListTodo,
-  Moon,
-  Pencil,
-  Save,
-  Search,
-  Sun,
-  Sunrise,
-  Sunset,
-  TimerReset,
-  Trash2,
-  X,
-} from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-
-// Using shadcn-style UI components from @/components/ui
-
-// ---------- Types ----------
-/** @typedef {"low"|"medium"|"high"|"urgent"} Priority */
-/** @typedef {"todo"|"doing"|"done"} Status */
-/** @typedef {"any"|"morning"|"afternoon"|"evening"} Slot */
-/** @typedef {"low"|"medium"|"high"} Energy */
-
-/**
- * @typedef Subtask
- * @prop {string} id
- * @prop {string} title
- * @prop {boolean} done
- */
-
-/**
- * @typedef Recurrence
- * @prop {"none"|"daily"|"weekly"|"monthly"} freq
- * @prop {number} [interval] // every n units
- * @prop {number[]} [byWeekday] // 0-6 (Sun-Sat) for weekly
- */
-
-/**
- * @typedef Task
- * @prop {string} id
- * @prop {string} title
- * @prop {string} notes
- * @prop {string | null} due // YYYY-MM-DD
- * @prop {Priority} priority
- * @prop {Status} status
- * @prop {string[]} tags
- * @prop {string} createdAt
- * @prop {string} updatedAt
- * @prop {string | null} completedAt
- * @prop {Subtask[]} subtasks
- * @prop {Recurrence} recurrence
- * @prop {string | null} remindAt // ISO datetime-local string
- * @prop {boolean} notified
- * @prop {Energy} energy
- * @prop {number} durationMin
- * @prop {Slot} slot
- */
 
 const STORAGE_KEY = "best_todo_app_v2";
 
@@ -290,6 +253,7 @@ export default function BestTodoApp() {
       const serialized = JSON.stringify(tasks);
       localStorage.setItem(STORAGE_KEY, serialized);
       saveSnapshot({ tasks });
+  // live sync removed
     }, 200);
     return () => clearTimeout(id);
   }, [tasks]);
@@ -343,6 +307,7 @@ export default function BestTodoApp() {
   useEffect(() => {
     // Improve data durability on mobile
     requestPersistentStorage();
+  // live sync removed
     try {
       const hasLocal = !!localStorage.getItem(STORAGE_KEY);
       if (!hasLocal) {
@@ -351,6 +316,7 @@ export default function BestTodoApp() {
             setTasks(snap.tasks);
           }
         });
+  // live sync removed
       }
     } catch {}
 
@@ -663,6 +629,7 @@ export default function BestTodoApp() {
                 >
                   {showDone ? "Hide done" : "Show done"}
                 </Button>
+                <QRSyncControl getTasks={() => tasks} setTasks={setTasks} />
                 <Button
                   variant="secondary"
                   onClick={async () => {
@@ -932,6 +899,167 @@ function Tab({ icon: Icon, label, active, onClick }) {
     >
       <Icon className="h-4 w-4" /> {label}
     </button>
+  );
+}
+
+// Live sync UI removed
+
+function QRSyncControl({ getTasks, setTasks }) {
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState("send"); // send | receive
+  const [dataUrl, setDataUrl] = useState("");
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const scanTimer = useRef(null);
+
+  async function genQR() {
+    try {
+      const payload = { v: 2, tasks: getTasks() };
+      const text = compressToEncodedURIComponent(JSON.stringify(payload));
+      const url = await QRCode.toDataURL(`tasks:${text}`, { margin: 1, scale: 6 });
+      setDataUrl(url);
+    } catch (e) {
+      alert("Failed to generate QR: " + e.message);
+    }
+  }
+
+  async function decodeFromImage(imgEl) {
+    try {
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext("2d");
+      const w = imgEl.naturalWidth || imgEl.width;
+      const h = imgEl.naturalHeight || imgEl.height;
+      canvas.width = w;
+      canvas.height = h;
+      ctx.drawImage(imgEl, 0, 0, w, h);
+      const img = ctx.getImageData(0, 0, w, h);
+      const code = window.jsQR?.(img.data, img.width, img.height);
+      if (code?.data?.startsWith("tasks:")) {
+        const raw = code.data.slice(6);
+        const json = JSON.parse(decompressFromEncodedURIComponent(raw));
+        if (json?.tasks && Array.isArray(json.tasks)) {
+          setTasks(json.tasks);
+          setOpen(false);
+          return true;
+        }
+      }
+    } catch (e) {
+      alert("Failed to decode QR: " + e.message);
+    }
+    return false;
+  }
+
+  function onFileChange(e) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const img = new Image();
+    img.onload = async () => {
+      await decodeFromImage(img);
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(img.src);
+      alert("Invalid image file");
+    };
+    img.src = URL.createObjectURL(f);
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    if (mode === "send") {
+      genQR();
+      return;
+    }
+    // receive: start camera
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices?.getUserMedia?.({ video: { facingMode: "environment" } });
+        if (!stream) return;
+        const video = videoRef.current;
+        video.srcObject = stream;
+        await video.play();
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext("2d");
+        const loop = async () => {
+          if (video.readyState === video.HAVE_ENOUGH_DATA) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = window.jsQR?.(img.data, img.width, img.height);
+            if (code?.data?.startsWith("tasks:")) {
+              const raw = code.data.slice(6);
+              try {
+                const json = JSON.parse(decompressFromEncodedURIComponent(raw));
+                if (json?.tasks && Array.isArray(json.tasks)) {
+                  setTasks(json.tasks);
+                  setOpen(false);
+                  // stop camera
+                  stream.getTracks().forEach((t) => t.stop());
+                  return;
+                }
+              } catch {}
+            }
+          }
+          scanTimer.current = requestAnimationFrame(loop);
+        };
+        loop();
+      } catch (e) {
+        alert("Camera error: " + e.message);
+      }
+    })();
+    return () => {
+      if (scanTimer.current) cancelAnimationFrame(scanTimer.current);
+      const v = videoRef.current;
+      const s = v?.srcObject;
+      if (s?.getTracks) s.getTracks().forEach((t) => t.stop());
+    };
+  }, [open, mode]);
+
+  return (
+    <>
+      <Button variant="secondary" className="h-10" onClick={() => setOpen(true)}>
+        QR Sync
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>QR Sync</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="flex gap-2">
+              <Button variant={mode === "send" ? "default" : "secondary"} onClick={() => setMode("send")}>Send</Button>
+              <Button variant={mode === "receive" ? "default" : "secondary"} onClick={() => setMode("receive")}>Receive</Button>
+            </div>
+            {mode === "send" ? (
+              <div className="flex flex-col items-center gap-2">
+                {dataUrl ? (
+                  <img src={dataUrl} alt="tasks qr" className="h-56 w-56 rounded-lg border border-slate-200 dark:border-slate-700" />
+                ) : (
+                  <div className="h-56 w-56 rounded-lg border border-dashed border-slate-300 dark:border-slate-700" />
+                )}
+                <div className="text-xs text-slate-500 dark:text-slate-400">สแกนจากเครื่องปลายทางเพื่อรับข้อมูล</div>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-2">
+                <video ref={videoRef} className="h-56 w-56 rounded-lg object-cover" playsInline muted />
+                <canvas ref={canvasRef} className="hidden" />
+                <label className="text-xs text-slate-500 dark:text-slate-400">
+                  สแกน QR จากเครื่องต้นทางเพื่อรับข้อมูล หรืออัพโหลดรูป QR
+                </label>
+                <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border px-2 py-1 text-xs hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/60">
+                  <input type="file" accept="image/*" onChange={onFileChange} className="hidden" />
+                  เลือกรูป QR
+                </label>
+              </div>
+            )}
+          </div>
+          <DialogFooter className="sm:justify-end">
+            <Button variant="ghost" onClick={() => setOpen(false)}>ปิด</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
