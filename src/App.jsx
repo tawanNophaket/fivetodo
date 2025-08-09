@@ -2,49 +2,48 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
-  DialogClose,
 } from "@/components/ui/dialog";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
-  ListTodo,
-  LayoutGrid,
-  KanbanSquare,
-  Sun,
-  TimerReset,
-  CheckCircle2,
-  Calendar as CalendarIcon,
-  Flag,
-  Search,
+  listSnapshots,
+  requestPersistentStorage,
+  restoreLatest,
+  saveSnapshot,
+} from "@/lib/history";
+import { AnimatePresence, motion } from "framer-motion";
+import {
   Bell,
   BellRing,
-  X,
+  Calendar as CalendarIcon,
+  CheckCircle2,
+  Flag,
+  KanbanSquare,
+  LayoutGrid,
+  ListTodo,
+  Moon,
   Pencil,
-  Trash2,
   Save,
+  Search,
+  Sun,
   Sunrise,
   Sunset,
-  Moon,
+  TimerReset,
+  Trash2,
+  X,
 } from "lucide-react";
-import QRCode from "qrcode";
 import {
   compressToEncodedURIComponent,
   decompressFromEncodedURIComponent,
 } from "lz-string";
-import {
-  saveSnapshot,
-  listSnapshots,
-  requestPersistentStorage,
-  restoreLatest,
-} from "@/lib/history";
+import QRCode from "qrcode";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const STORAGE_KEY = "best_todo_app_v2";
 
@@ -75,6 +74,32 @@ function haptic(ms = 12) {
   try {
     navigator.vibrate?.(ms);
   } catch {}
+}
+
+// Helper: build ISO strings for date/datetime quick picks
+function isoDate(d = new Date()) {
+  return new Date(d).toISOString().slice(0, 10);
+}
+function isoDateTimeLocal(d = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  const dt = new Date(d);
+  return (
+    dt.getFullYear() +
+    "-" +
+    pad(dt.getMonth() + 1) +
+    "-" +
+    pad(dt.getDate()) +
+    "T" +
+    pad(dt.getHours()) +
+    ":" +
+    pad(dt.getMinutes())
+  );
+}
+function atTime(baseDate = new Date(), hours = 9, minutes = 0, addDaysN = 0) {
+  const d = new Date(baseDate);
+  d.setDate(d.getDate() + addDaysN);
+  d.setHours(hours, minutes, 0, 0);
+  return isoDateTimeLocal(d);
 }
 
 /**
@@ -239,6 +264,31 @@ export default function BestTodoApp() {
       return "system";
     }
   });
+  // Quick Add (no-typing) builder state
+  const [showQa, setShowQa] = useState(() => {
+    try {
+      return localStorage.getItem("showQa") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("showQa", showQa ? "1" : "0");
+    } catch {}
+  }, [showQa]);
+  const [qa, setQa] = useState(() => ({
+    title: "",
+    priority: /** @type {Priority} */ ("medium"),
+    due: /** @type {string|null} */ (null),
+    tags: /** @type {string[]} */ ([]),
+    energy: /** @type {Energy} */ ("medium"),
+    durationMin: 25,
+    slot: /** @type {Slot} */ ("any"),
+    remindAt: /** @type {string|null} */ (null),
+    recurrence: /** @type {Recurrence} */ ({ freq: "none", interval: 1 }),
+  }));
+  const setQaPatch = (patch) => setQa((prev) => ({ ...prev, ...patch }));
   const inputRef = useRef(null);
   const timersRef = useRef(/** @type {Record<string,number>} */ ({}));
   const [toast, setToast] = useState(
@@ -253,7 +303,7 @@ export default function BestTodoApp() {
       const serialized = JSON.stringify(tasks);
       localStorage.setItem(STORAGE_KEY, serialized);
       saveSnapshot({ tasks });
-  // live sync removed
+      // live sync removed
     }, 200);
     return () => clearTimeout(id);
   }, [tasks]);
@@ -307,7 +357,7 @@ export default function BestTodoApp() {
   useEffect(() => {
     // Improve data durability on mobile
     requestPersistentStorage();
-  // live sync removed
+    // live sync removed
     try {
       const hasLocal = !!localStorage.getItem(STORAGE_KEY);
       if (!hasLocal) {
@@ -316,7 +366,7 @@ export default function BestTodoApp() {
             setTasks(snap.tasks);
           }
         });
-  // live sync removed
+        // live sync removed
       }
     } catch {}
 
@@ -480,6 +530,33 @@ export default function BestTodoApp() {
     setQuick("");
   }
 
+  function addTaskFromBuilder() {
+    const now = new Date().toISOString();
+    /** @type {Task} */
+    const task = {
+      id: uuid(),
+      title: qa.title.trim() || quick.trim() || "New task",
+      notes: "",
+      due: qa.due,
+      priority: qa.priority,
+      status: "todo",
+      tags: qa.tags,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+      subtasks: [],
+      recurrence: qa.recurrence || { freq: "none", interval: 1 },
+      remindAt: qa.remindAt,
+      notified: false,
+      energy: qa.energy,
+      durationMin: qa.durationMin || 25,
+      slot: qa.slot,
+    };
+    setTasks((prev) => [task, ...prev]);
+    setQuick("");
+    haptic();
+  }
+
   function toggleDone(id) {
     // snapshot current state for undo
     saveSnapshot({ tasks });
@@ -582,7 +659,7 @@ export default function BestTodoApp() {
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div className="flex items-center gap-3">
                 <ListTodo className="h-5 w-5 text-slate-900 dark:text-slate-100 md:h-6 md:w-6" />
-                <h1 className="text-lg font-semibold tracking-tight md:text-xl">
+                <h1 className="text-lg font-semibold tracking-tight md:text-xl bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 bg-clip-text text-transparent">
                   FIVE
                 </h1>
               </div>
@@ -698,27 +775,48 @@ export default function BestTodoApp() {
         </div>
 
         {/* Quick add */}
-        <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center">
-          <Input
-            ref={inputRef}
-            value={quick}
-            onChange={(e) => setQuick(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && addTaskFromQuick()}
-            placeholder="Add a task… (^date, #tags, !p1-!p4)"
-            aria-label="Quick add"
-          />
-          <div className="flex gap-2">
-            <Button onClick={addTaskFromQuick} className="h-10">
-              Add
-            </Button>
-            <Button
-              variant={notifReady ? "default" : "secondary"}
-              onClick={enableNotifications}
-              className="h-10"
-            >
-              {notifReady ? "Notifications On" : "Enable notifications"}
-            </Button>
+        <div className="mt-4 space-y-2">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center">
+            <Input
+              ref={inputRef}
+              value={quick}
+              onChange={(e) => setQuick(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addTaskFromQuick()}
+              placeholder="Quick title (optional)…"
+              aria-label="Quick add"
+            />
+            <div className="flex gap-2">
+              <Button
+                variant="primary"
+                onClick={addTaskFromBuilder}
+                className="h-10"
+              >
+                Add task
+              </Button>
+              <Button
+                onClick={() => setShowQa((v) => !v)}
+                variant="secondary"
+                className="h-10"
+              >
+                {showQa ? "Hide options" : "Options"}
+              </Button>
+              <Button
+                variant={notifReady ? "default" : "secondary"}
+                onClick={enableNotifications}
+                className="h-10"
+              >
+                {notifReady ? "Notifications On" : "Enable notifications"}
+              </Button>
+            </div>
           </div>
+          {showQa && (
+            <QuickAddPanel
+              qa={qa}
+              setQa={setQaPatch}
+              tagsAll={tags}
+              onAdd={addTaskFromBuilder}
+            />
+          )}
         </div>
 
         {/* Tag bar - minimal */}
@@ -794,7 +892,7 @@ export default function BestTodoApp() {
         </div>
 
         {/* Bottom nav (mobile) */}
-        <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/90 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 md:hidden pb-safe">
+        <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/90 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 md:hidden pb-safe shadow-[0_-6px_12px_-8px_rgba(0,0,0,0.25)]">
           <div className="mx-auto flex max-w-5xl items-center justify-around px-4 py-2">
             <button
               className={`flex flex-col items-center gap-1 text-xs ${
@@ -902,6 +1000,245 @@ function Tab({ icon: Icon, label, active, onClick }) {
   );
 }
 
+function Chip({ active, children, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-full px-3 py-1 text-xs transition-colors border ${
+        active
+          ? "border-transparent bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+          : "border-slate-200 text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800/70"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function QuickAddPanel({ qa, setQa, tagsAll, onAdd }) {
+  const toggleTag = (t) => {
+    const set = new Set(qa.tags);
+    set.has(t) ? set.delete(t) : set.add(t);
+    setQa({ tags: Array.from(set) });
+  };
+  return (
+    <Card className="rounded-xl">
+      <CardContent className="space-y-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-slate-500">Priority</div>
+            <div className="flex flex-wrap gap-2">
+              {["low", "medium", "high", "urgent"].map((p) => (
+                <Chip
+                  key={p}
+                  active={qa.priority === p}
+                  onClick={() => setQa({ priority: p })}
+                >
+                  <Flag className="mr-1 inline h-3 w-3" /> {p}
+                </Chip>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-slate-500">Due</div>
+            <div className="flex flex-wrap gap-2">
+              <Chip
+                active={qa.due === isoDate()}
+                onClick={() => setQa({ due: isoDate() })}
+              >
+                Today
+              </Chip>
+              <Chip
+                active={qa.due === addDays(isoDate(), 1)}
+                onClick={() => setQa({ due: addDays(isoDate(), 1) })}
+              >
+                Tomorrow
+              </Chip>
+              <Chip
+                active={qa.due === addDays(isoDate(), 7)}
+                onClick={() => setQa({ due: addDays(isoDate(), 7) })}
+              >
+                +7d
+              </Chip>
+              <Input
+                type="date"
+                value={qa.due ?? ""}
+                onChange={(e) => setQa({ due: e.target.value || null })}
+                className="h-8 w-36"
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-slate-500">Energy</div>
+            <div className="flex flex-wrap gap-2">
+              {["low", "medium", "high"].map((e) => (
+                <Chip
+                  key={e}
+                  active={qa.energy === e}
+                  onClick={() => setQa({ energy: e })}
+                >
+                  {e}
+                </Chip>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-slate-500">Duration</div>
+            <div className="flex flex-wrap items-center gap-2">
+              {[15, 25, 45, 60].map((m) => (
+                <Chip
+                  key={m}
+                  active={qa.durationMin === m}
+                  onClick={() => setQa({ durationMin: m })}
+                >
+                  {m}m
+                </Chip>
+              ))}
+              <Input
+                type="number"
+                className="h-8 w-24"
+                min={5}
+                step={5}
+                value={qa.durationMin}
+                onChange={(e) =>
+                  setQa({ durationMin: Number(e.target.value || 0) })
+                }
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-slate-500">Slot</div>
+            <div className="flex flex-wrap gap-2">
+              {["any", "morning", "afternoon", "evening"].map((s) => (
+                <Chip
+                  key={s}
+                  active={qa.slot === s}
+                  onClick={() => setQa({ slot: s })}
+                >
+                  {s}
+                </Chip>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-slate-500">Tags</div>
+            <div className="flex flex-wrap gap-2">
+              {tagsAll.map((t) => (
+                <Chip
+                  key={t}
+                  active={qa.tags.includes(t)}
+                  onClick={() => toggleTag(t)}
+                >
+                  #{t}
+                </Chip>
+              ))}
+              <Input
+                placeholder="#new-tag"
+                className="h-8 w-36"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    const v = e.currentTarget.value
+                      .trim()
+                      .toLowerCase()
+                      .replace(/^#/, "");
+                    if (v && !qa.tags.includes(v))
+                      setQa({ tags: [...qa.tags, v] });
+                    e.currentTarget.value = "";
+                  }
+                }}
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-slate-500">Reminder</div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Chip
+                onClick={() => setQa({ remindAt: atTime(new Date(), 9, 0) })}
+              >
+                Today 09:00
+              </Chip>
+              <Chip
+                onClick={() => setQa({ remindAt: atTime(new Date(), 18, 0) })}
+              >
+                Today 18:00
+              </Chip>
+              <Chip
+                onClick={() => setQa({ remindAt: atTime(new Date(), 9, 0, 1) })}
+              >
+                Tomorrow 09:00
+              </Chip>
+              <Input
+                type="datetime-local"
+                className="h-8 w-56"
+                value={qa.remindAt ?? ""}
+                onChange={(e) => setQa({ remindAt: e.target.value || null })}
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-slate-500">Repeat</div>
+            <div className="flex flex-wrap items-center gap-2">
+              {["none", "daily", "weekly", "monthly"].map((f) => (
+                <Chip
+                  key={f}
+                  active={qa.recurrence?.freq === f}
+                  onClick={() =>
+                    setQa({ recurrence: { ...(qa.recurrence || {}), freq: f } })
+                  }
+                >
+                  {f}
+                </Chip>
+              ))}
+              {qa.recurrence?.freq !== "none" && (
+                <>
+                  <span className="text-xs text-slate-500">Every</span>
+                  <Input
+                    type="number"
+                    className="h-8 w-20"
+                    min={1}
+                    value={qa.recurrence?.interval || 1}
+                    onChange={(e) =>
+                      setQa({
+                        recurrence: {
+                          ...(qa.recurrence || {}),
+                          interval: Number(e.target.value || 1),
+                        },
+                      })
+                    }
+                  />
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2">
+          <Button
+            variant="secondary"
+            onClick={() =>
+              setQa({
+                title: "",
+                priority: "medium",
+                due: null,
+                tags: [],
+                energy: "medium",
+                durationMin: 25,
+                slot: "any",
+                remindAt: null,
+                recurrence: { freq: "none", interval: 1 },
+              })
+            }
+          >
+            Reset
+          </Button>
+          <Button variant="primary" onClick={onAdd}>
+            <CheckCircle2 className="mr-2 h-4 w-4" /> Create
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // Live sync UI removed
 
 function QRSyncControl({ getTasks, setTasks }) {
@@ -916,7 +1253,10 @@ function QRSyncControl({ getTasks, setTasks }) {
     try {
       const payload = { v: 2, tasks: getTasks() };
       const text = compressToEncodedURIComponent(JSON.stringify(payload));
-      const url = await QRCode.toDataURL(`tasks:${text}`, { margin: 1, scale: 6 });
+      const url = await QRCode.toDataURL(`tasks:${text}`, {
+        margin: 1,
+        scale: 6,
+      });
       setDataUrl(url);
     } catch (e) {
       alert("Failed to generate QR: " + e.message);
@@ -973,7 +1313,9 @@ function QRSyncControl({ getTasks, setTasks }) {
     // receive: start camera
     (async () => {
       try {
-        const stream = await navigator.mediaDevices?.getUserMedia?.({ video: { facingMode: "environment" } });
+        const stream = await navigator.mediaDevices?.getUserMedia?.({
+          video: { facingMode: "environment" },
+        });
         if (!stream) return;
         const video = videoRef.current;
         video.srcObject = stream;
@@ -1018,7 +1360,11 @@ function QRSyncControl({ getTasks, setTasks }) {
 
   return (
     <>
-      <Button variant="secondary" className="h-10" onClick={() => setOpen(true)}>
+      <Button
+        variant="secondary"
+        className="h-10"
+        onClick={() => setOpen(true)}
+      >
         QR Sync
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
@@ -1028,34 +1374,62 @@ function QRSyncControl({ getTasks, setTasks }) {
           </DialogHeader>
           <div className="space-y-3">
             <div className="flex gap-2">
-              <Button variant={mode === "send" ? "default" : "secondary"} onClick={() => setMode("send")}>Send</Button>
-              <Button variant={mode === "receive" ? "default" : "secondary"} onClick={() => setMode("receive")}>Receive</Button>
+              <Button
+                variant={mode === "send" ? "default" : "secondary"}
+                onClick={() => setMode("send")}
+              >
+                Send
+              </Button>
+              <Button
+                variant={mode === "receive" ? "default" : "secondary"}
+                onClick={() => setMode("receive")}
+              >
+                Receive
+              </Button>
             </div>
             {mode === "send" ? (
               <div className="flex flex-col items-center gap-2">
                 {dataUrl ? (
-                  <img src={dataUrl} alt="tasks qr" className="h-56 w-56 rounded-lg border border-slate-200 dark:border-slate-700" />
+                  <img
+                    src={dataUrl}
+                    alt="tasks qr"
+                    className="h-56 w-56 rounded-lg border border-slate-200 dark:border-slate-700"
+                  />
                 ) : (
                   <div className="h-56 w-56 rounded-lg border border-dashed border-slate-300 dark:border-slate-700" />
                 )}
-                <div className="text-xs text-slate-500 dark:text-slate-400">สแกนจากเครื่องปลายทางเพื่อรับข้อมูล</div>
+                <div className="text-xs text-slate-500 dark:text-slate-400">
+                  สแกนจากเครื่องปลายทางเพื่อรับข้อมูล
+                </div>
               </div>
             ) : (
               <div className="flex flex-col items-center gap-2">
-                <video ref={videoRef} className="h-56 w-56 rounded-lg object-cover" playsInline muted />
+                <video
+                  ref={videoRef}
+                  className="h-56 w-56 rounded-lg object-cover"
+                  playsInline
+                  muted
+                />
                 <canvas ref={canvasRef} className="hidden" />
                 <label className="text-xs text-slate-500 dark:text-slate-400">
                   สแกน QR จากเครื่องต้นทางเพื่อรับข้อมูล หรืออัพโหลดรูป QR
                 </label>
                 <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border px-2 py-1 text-xs hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/60">
-                  <input type="file" accept="image/*" onChange={onFileChange} className="hidden" />
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={onFileChange}
+                    className="hidden"
+                  />
                   เลือกรูป QR
                 </label>
               </div>
             )}
           </div>
           <DialogFooter className="sm:justify-end">
-            <Button variant="ghost" onClick={() => setOpen(false)}>ปิด</Button>
+            <Button variant="ghost" onClick={() => setOpen(false)}>
+              ปิด
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1109,7 +1483,7 @@ function ListView({ items, onToggle, onRemove, onUpdate }) {
 
 function StatCard({ label, value, sub, icon: Icon }) {
   return (
-    <Card className="rounded-xl">
+    <Card className="rounded-xl bg-gradient-to-b from-white to-slate-50 dark:from-slate-900 dark:to-slate-900/60">
       <CardHeader className="pb-2">
         <div className="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-400">
           {Icon ? <Icon className="h-4 w-4" /> : null}

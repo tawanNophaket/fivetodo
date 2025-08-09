@@ -5,6 +5,8 @@ const variants = {
     "bg-white text-slate-900 border border-slate-200 hover:bg-slate-50 active:bg-slate-100 dark:bg-slate-900 dark:text-slate-100 dark:border-slate-700 dark:hover:bg-slate-800",
   ghost:
     "bg-transparent hover:bg-slate-100 active:bg-slate-200 dark:hover:bg-slate-800 dark:active:bg-slate-700",
+  primary:
+    "text-white bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-500 hover:brightness-110 active:brightness-95 shadow-sm",
 };
 const sizes = {
   sm: "h-8 px-3 text-sm",
