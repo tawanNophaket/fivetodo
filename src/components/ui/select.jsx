@@ -1,4 +1,5 @@
 import * as RadixSelect from "@radix-ui/react-select";
+import { ChevronDown } from "lucide-react";
 
 export const Select = RadixSelect.Root;
 export const SelectTrigger = ({ className = "", children, ...props }) => (
@@ -7,6 +8,11 @@ export const SelectTrigger = ({ className = "", children, ...props }) => (
     {...props}
   >
     <RadixSelect.Value />
+    {children ?? (
+      <RadixSelect.Icon className="ml-2 opacity-50">
+        <ChevronDown className="h-4 w-4" />
+      </RadixSelect.Icon>
+    )}
   </RadixSelect.Trigger>
 );
 export const SelectValue = RadixSelect.Value;
